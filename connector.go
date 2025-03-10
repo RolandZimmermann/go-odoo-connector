@@ -78,8 +78,8 @@ package odoo
 import (
 	"fmt"
 	"log"
-	"net/rpc"
-	"net/rpc/jsonrpc"
+
+	"github.com/kolo/xmlrpc"
 )
 
 // Connector represents an Odoo API connection
@@ -89,8 +89,8 @@ type Connector struct {
 	APIKey   string
 	DB       string
 	UID      int
-	common   *rpc.Client
-	models   *rpc.Client
+	common   *xmlrpc.Client
+	models   *xmlrpc.Client
 }
 
 // SearchReadOptions contains options for searching and reading records
@@ -111,21 +111,21 @@ func NewConnector(url, username, apiKey, db string) (*Connector, error) {
 		DB:       db,
 	}
 
-	// Initialize RPC clients
+	// Initialize XML-RPC clients
 	var err error
-	c.common, err = jsonrpc.Dial("tcp", fmt.Sprintf("%s/xmlrpc/2/common", url))
+	c.common, err = xmlrpc.NewClient(fmt.Sprintf("%s/xmlrpc/2/common", url))
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to common endpoint: %w", err)
 	}
 
-	c.models, err = jsonrpc.Dial("tcp", fmt.Sprintf("%s/xmlrpc/2/object", url))
+	c.models, err = xmlrpc.NewClient(fmt.Sprintf("%s/xmlrpc/2/object", url))
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to models endpoint: %w", err)
 	}
 
 	// Authenticate and get user ID
 	var uid int
-	err = c.common.Call("authenticate", []interface{}{db, username, apiKey, map[string]interface{}{}}, &uid)
+	err = c.common.Call("authenticate", []interface{}{db, username, apiKey, map[string]string{}}, &uid)
 	if err != nil {
 		return nil, fmt.Errorf("authentication failed: %w", err)
 	}
@@ -162,6 +162,84 @@ func (c *Connector) SearchReadRecords(model string, opts SearchReadOptions) ([]m
 
 	if err != nil {
 		return nil, fmt.Errorf("search_read failed for model %s: %w", model, err)
+	}
+
+	return result, nil
+}
+
+// CreateRecord creates a new record in Odoo
+func (c *Connector) CreateRecord(model string, values map[string]interface{}) (int64, error) {
+	var id int64
+	err := c.models.Call("execute_kw", []interface{}{
+		c.DB, c.UID, c.APIKey,
+		model, "create",
+		[]interface{}{values},
+	}, &id)
+
+	if err != nil {
+		return 0, fmt.Errorf("create failed for model %s: %w", model, err)
+	}
+
+	return id, nil
+}
+
+// UpdateRecord updates an existing record in Odoo
+func (c *Connector) UpdateRecord(model string, id int64, values map[string]interface{}) error {
+	var result bool
+	err := c.models.Call("execute_kw", []interface{}{
+		c.DB, c.UID, c.APIKey,
+		model, "write",
+		[]interface{}{[]int64{id}, values},
+	}, &result)
+
+	if err != nil {
+		return fmt.Errorf("update failed for model %s with id %d: %w", model, id, err)
+	}
+
+	if !result {
+		return fmt.Errorf("update failed for model %s with id %d: no record updated", model, id)
+	}
+
+	return nil
+}
+
+// DeleteRecord deletes a record from Odoo
+func (c *Connector) DeleteRecord(model string, id int64) error {
+	var result bool
+	err := c.models.Call("execute_kw", []interface{}{
+		c.DB, c.UID, c.APIKey,
+		model, "unlink",
+		[]interface{}{[]int64{id}},
+	}, &result)
+
+	if err != nil {
+		return fmt.Errorf("delete failed for model %s with id %d: %w", model, id, err)
+	}
+
+	if !result {
+		return fmt.Errorf("delete failed for model %s with id %d: no record deleted", model, id)
+	}
+
+	return nil
+}
+
+// ExecuteMethod executes a custom method on an Odoo model
+func (c *Connector) ExecuteMethod(model string, method string, args []interface{}, kwargs map[string]interface{}) (interface{}, error) {
+	var result interface{}
+
+	callArgs := []interface{}{
+		c.DB, c.UID, c.APIKey,
+		model, method,
+		args,
+	}
+
+	if kwargs != nil {
+		callArgs = append(callArgs, kwargs)
+	}
+
+	err := c.models.Call("execute_kw", callArgs, &result)
+	if err != nil {
+		return nil, fmt.Errorf("method execution failed for %s.%s: %w", model, method, err)
 	}
 
 	return result, nil
