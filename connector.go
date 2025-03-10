@@ -78,6 +78,7 @@ package odoo
 import (
 	"fmt"
 	"log"
+	"net/http"
 
 	"github.com/kolo/xmlrpc"
 )
@@ -113,12 +114,13 @@ func NewConnector(url, username, apiKey, db string) (*Connector, error) {
 
 	// Initialize XML-RPC clients
 	var err error
-	c.common, err = xmlrpc.NewClient(fmt.Sprintf("%s/xmlrpc/2/common", url))
+	transport := &http.Transport{}
+	c.common, err = xmlrpc.NewClient(fmt.Sprintf("%s/xmlrpc/2/common", url), transport)
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to common endpoint: %w", err)
 	}
 
-	c.models, err = xmlrpc.NewClient(fmt.Sprintf("%s/xmlrpc/2/object", url))
+	c.models, err = xmlrpc.NewClient(fmt.Sprintf("%s/xmlrpc/2/object", url), transport)
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to models endpoint: %w", err)
 	}
